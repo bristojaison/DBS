@@ -1,0 +1,54 @@
+name: CI CD Automatic Deployment
+
+on: 
+  push: 
+    branches:
+      main
+jobs:
+  terraform-deploy:
+    runs-on: devops
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Deploy Docker Image to Infrastructure
+        shell: pwsh
+        run: |
+          $vm_ips = az vm list-ip-addresses --query "[].virtualMachine.network.publicIpAddresses[].ipAddress" -o tsv
+          
+          $username = "azureadmin"
+          $app_folder = "HelloWorld"
+          
+          echo 'Q!w2e3r4t5y6u7' | sudo docker --version          
+          Set-Location -Path $app_folder
+          
+          Write-Output "Building Docker image..."
+          sudo docker build -t automated_app .
+          sudo docker save automated_app -o automated_app.tar
+          Get-ChildItem
+
+          
+          foreach ($ip in $vm_ips) 
+          {
+              $ip = $ip.Trim()
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo DEBIAN_FRONTEND=noninteractive apt update -y; sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y; sudo DEBIAN_FRONTEND=noninteractive apt install -y docker.io"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo systemctl start docker"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo docker image rm automated_app"
+
+              sudo scp automated_app.tar $username@$ip':/home/azureadmin/'
+              if ($LASTEXITCODE -eq 0) {
+                  Write-Output "Docker image successfully transferred to the remote server."
+              } else {
+                  Write-Output "Failed to transfer the Docker image to the remote server."
+                  continue
+              }
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "cd /home/azureadmin/ && sudo docker load -i automated_app.tar"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo docker rm -f my_automation"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "rm automated_app.tar"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo docker images"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo docker ps"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo lsof -i :80"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo docker stop my_automation"
+              ssh -t -o StrictHostKeyChecking=no "$username@$ip" "sudo docker run -d -p 80:80 --name my_automation automated_app"
+          }
